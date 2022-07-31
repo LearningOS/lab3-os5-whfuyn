@@ -34,7 +34,7 @@ pub use elf_loader::get_app_data;
 //     static _num_app: usize;
 // }
 
-const STRIDE: u64 = 800;
+const STRIDE: u64 = 1000;
 
 global_asm!(include_str!("task/switch.S"));
 extern "C" {
