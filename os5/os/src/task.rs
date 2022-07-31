@@ -34,7 +34,7 @@ pub use elf_loader::get_app_data;
 //     static _num_app: usize;
 // }
 
-const STRIDE: u64 = 11234567;
+const STRIDE: u64 = 800;
 
 global_asm!(include_str!("task/switch.S"));
 extern "C" {
@@ -139,6 +139,7 @@ impl TaskControlBlockInner {
         assert_eq!(self.status, TaskStatus::Ready);
         self.status = TaskStatus::Running;
         self.stats.record_schedule_begin();
+        self.pass += STRIDE / self.priority;
 
         &self.cx as *const TaskContext
     }
@@ -149,7 +150,6 @@ impl TaskControlBlockInner {
         if self.status == TaskStatus::Running {
             self.status = TaskStatus::Ready;
         }
-        self.pass += STRIDE / self.priority;
 
         &mut self.cx as *mut TaskContext
     }
