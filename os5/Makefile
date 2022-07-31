@@ -1,58 +1,70 @@
-# Building
-TARGET := riscv64gc-unknown-none-elf
-MODE := release
-KERNEL_ELF := target/$(TARGET)/$(MODE)/os
-KERNEL_BIN := $(KERNEL_ELF).bin
-KERNEL_ASM := $(KERNEL_ELF).asm
+LOADER := loader
+LOADER_OUT_DIR := $(LOADER)/target/riscv64gc-unknown-none-elf/release
 
-# BOARD
-BOARD ?= qemu
-SBI ?= rustsbi
-BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
+OS := os
+OS_OUT_DIR := $(OS)/target/riscv64gc-unknown-none-elf/release
 
-# KERNEL ENTRY
-KERNEL_ENTRY_PA := 0x80200000
+RUSTSBI_QEMU := rustsbi-qemu
+RUSTSBI_QEMU_OUT_DIR := $(RUSTSBI_QEMU)/target/riscv64imac-unknown-none-elf/release
 
-# Binutils
-OBJDUMP := rust-objdump --arch-name=riscv64
-OBJCOPY := rust-objcopy --binary-architecture=riscv64
+STRIP := rust-objcopy \
+		--binary-architecture=riscv64 \
+		--strip-all \
+		-O binary
 
-CHAPTER ?= 5
-TEST ?= $(CHAPTER)
-BASE ?= 1
+build-loader:
+	cd $(LOADER) && cargo build --release
+	$(STRIP) \
+		$(LOADER_OUT_DIR)/$(LOADER) \
+		$(LOADER_OUT_DIR)/$(LOADER).bin
 
-build: env $(KERNEL_BIN)
+build-os:
+	cd $(OS) && cargo build --release
+	$(STRIP) \
+		$(OS_OUT_DIR)/$(OS) \
+		$(OS_OUT_DIR)/$(OS).bin
 
-env:
-	(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
-	cargo install cargo-binutils --vers ~0.3
-	rustup component add rust-src
-	rustup component add llvm-tools-preview
+build-sbi:
+	cd $(RUSTSBI_QEMU) && cargo make
 
-$(KERNEL_BIN): kernel
-	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
+run: build-os build-loader
+	timeout --foreground 40s qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios rustsbi-qemu-orig.bin \
+		-device loader,file=$(LOADER_OUT_DIR)/$(LOADER).bin,addr=0x80200000
 
-kernel:
-	@make -C ../user build TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE)
-	@cargo build --release
-
-clean:
-	@cargo clean
-
-run: build
+run-self-built-sbi: build-os build-loader build-sbi
 	@qemu-system-riscv64 \
 		-machine virt \
 		-nographic \
-		-bios $(BOOTLOADER) \
-		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA)
+		-bios rustsbi-qemu-orig.bin \
+	 	-bios $(RUSTSBI_QEMU_OUT_DIR)/$(RUSTSBI_QEMU).bin \
+		-device loader,file=$(LOADER_OUT_DIR)/$(LOADER).bin,addr=0x80200000
 
-debug: build
-	@tmux new-session -d \
-		"qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S" && \
-		tmux split-window -h "riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'" && \
-		tmux -2 attach-session -d
+debug: build-os build-loader
+	@qemu-system-riscv64 \
+		-machine virt \
+		-nographic \
+		-bios rustsbi-qemu-orig.bin \
+		-device loader,file=$(LOADER_OUT_DIR)/$(LOADER).bin,addr=0x80200000 \
+		-s -S
 
-dbg: build
-	qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
+gdb: 
+	riscv64-unknown-elf-gdb \
+		-ex 'file $(OS_OUT_DIR)/$(OS)' \
+		-ex 'set arch riscv:rv64' \
+		-ex 'target remote localhost:1234'
 
-.PHONY: build env kernel clean run-inner
+clean:
+	@cd loader && cargo clean
+	@cd os && cargo clean && rm -f src/link_app.S
+	@cd user-lib && cargo clean && rm -f src/linker.ld
+
+clean-all:
+	@cd $(RUSTSBI_QEMU) && cargo clean
+	@cd loader && cargo clean
+	@cd os && cargo clean && rm -f src/link_app.S
+	@cd user-lib && cargo clean && rm -f src/linker.ld
+
+.PHONY: run debug gdb clean clean-all build-loader build-os build-sbi
